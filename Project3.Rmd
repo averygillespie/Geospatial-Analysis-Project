@@ -1,0 +1,329 @@
+---
+title: "Project3"
+author: "Avery Gillespie"
+date: "2025-12-11"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load in libraries and UFO csv 
+```{r}
+library(tidyverse)
+library(ggthemes)
+library(dplyr)
+library(ggplot2)
+ufo_csv <- read.csv('~/Downloads/ufo_sightings_scrubbed.csv')
+```
+
+Data Cleaning 
+```{r}
+#using only years after 2000 since it starts in 1949 and changing datetime formatting 
+ufo_csv$datetime <- as.character(ufo_csv$datetime)
+ufo_csv$datetime <- as.POSIXct(ufo_csv$datetime, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+ufo_csv <- ufo_csv[!is.na(ufo_csv$datetime) & as.numeric(format(ufo_csv$datetime, "%Y")) > 2000, ]
+
+#have only Australia ,Canada ,and USA (major countries represented)
+ufo_csv <- ufo_csv[ufo_csv$country %in% c("us", "ca", "au"), ]
+```
+
+Import in airport csvs for USA, Australia, and Canada 
+```{r}
+#us airports csv
+us_airports <-read.csv('~/Downloads/airports (4).csv')
+
+#australian airports csv
+au_airports <-read.csv('~/Downloads/au-airports.csv')
+
+#canada airports csv
+ca_airports <-read.csv('~/Downloads/ca-airports.csv')
+```
+
+
+Include Haversine measurements 
+```{r}
+haversine <- function(lat1, lon1, lat2, lon2) {
+  R <- 6371
+  dlat <- (lat2 - lat1) * pi / 180
+  dlon <- (lon2 - lon1) * pi / 180
+  a <- sin(dlat/2)^2 + cos(lat1*pi/180) * cos(lat2*pi/180) * sin(dlon/2)^2
+  c <- 2 * atan2(sqrt(a), sqrt(1 - a))
+  R * c
+}
+
+nearest_airport_distance <- function(ufo_df, airport_df) {
+  distances <- numeric(nrow(ufo_df))
+  
+  for(i in seq_len(nrow(ufo_df))) {
+    lat1 <- ufo_df$latitude[i]
+    lon1 <- ufo_df$longitude[i]
+    
+    dlist <- haversine(lat1, lon1,
+                       airport_df$latitude,
+                       airport_df$longitude)
+    
+    distances[i] <- min(dlist, na.rm = TRUE)
+  }
+  
+  distances
+}
+```
+
+
+Creating coordinate tables per country 
+```{r}
+#US airports coordinates table
+us_table <- data.frame(
+  latitude = us_airports$latitude,
+  longitude = us_airports$longitude
+)
+
+head(us_table)
+
+#Aussie airports coordinates table
+au_table <- data.frame(
+  latitude = au_airports$latitude_deg,
+  longitude = au_airports$longitude_deg
+)
+
+head(au_table)
+
+#canada airports coordinates table 
+ca_table <- data.frame(
+  latitude = ca_airports$latitude_deg,
+  longitude = ca_airports$longitude_deg
+)
+
+head(ca_table)
+
+
+
+
+# UFO sightings coordinates table
+ufo_table <- data.frame(
+  latitude = ufo_csv$latitude,
+  longitude = ufo_csv$longitude
+)
+head(ufo_table)
+```
+
+
+More data cleaning and organizing 
+```{r}
+
+#remove na
+ufo_table <- ufo_table[!is.na(ufo_table$latitude) & !is.na(ufo_table$longitude), ]
+
+#change to numeric 
+ufo_table$latitude <- as.numeric(ufo_table$latitude)
+ufo_table$longitude <- as.numeric(ufo_table$longitude)
+ufo_table <- ufo_table[!is.na(ufo_table$latitude) & !is.na(ufo_table$longitude), ]
+
+
+
+# combined table w all 4 with an extra column for source
+ufo_table$source <- "UFO"
+us_table$source <- "US Airport"
+au_table$source <- "AU Airport"
+ca_table$source <- "CA Airport"
+
+combined_table <- rbind(ufo_table, us_table, au_table, ca_table)
+
+head(combined_table)
+```
+
+Loading in country shapes and libraries 
+```{r}
+#load map librarys
+library(tidyverse)
+library(ggthemes)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+# load country shapes
+world <- ne_countries(scale = "medium", returnclass = "sf")
+```
+
+
+Prepping for plot
+```{r}
+#remove Alaska + Hawaii so its bigger 
+us_shape <- world %>% 
+  filter(admin == "United States of America" & !region_un %in% c("Oceania")) %>%
+  st_crop(xmin = -130, xmax = -60, ymin = 20, ymax = 50) 
+
+
+#more country shapes
+ca_shape <- world %>% filter(admin == "Canada")
+au_shape <- world %>% filter(admin == "Australia")
+
+# UFO sightings and airport coordinates by country
+ufo_us <- ufo_table[ufo_csv$country=="us",]
+ufo_ca <- ufo_table[ufo_csv$country=="ca",]
+ufo_au <- ufo_table[ufo_csv$country=="au",]
+
+us_airports_coords <- us_table
+ca_airports_coords <- ca_table
+au_airports_coords <- au_table
+```
+
+
+Creating density map plots per country 
+```{r}
+# plot density maps
+plot_density <- function(country_shape, ufo_coords, airport_coords, country_name) {
+  ggplot() +
+    geom_sf(data = country_shape, fill = "gray90") +
+    stat_density_2d(
+      data = ufo_coords,
+      aes(x = longitude, y = latitude, fill = after_stat(level)),
+      geom = "polygon", alpha = .8
+    ) +
+    geom_point(
+      data = airport_coords,
+      aes(x = longitude, y = latitude),
+      color = "#FE7F9C", size = .5, alpha = .2
+    ) +
+    scale_fill_viridis_c(
+      option = "viridis",
+      name = "Density of Sightings"
+    ) +
+    theme_minimal() +
+    ggtitle(paste("UFO Sightings vs Airports -", country_name)) +
+    xlab("Longitude") +
+    ylab("Latitude")
+}
+
+
+# US map
+plot_density(us_shape, ufo_us, us_airports_coords, "USA")
+
+# Canada map
+plot_density(ca_shape, ufo_ca, ca_airports_coords, "Canada")
+
+# Australia map
+plot_density(au_shape, ufo_au, au_airports_coords, "Australia")
+```
+
+Moving on to other Visualizations ! -----------
+
+Prepping for creating the grouped bar chart 
+```{r}
+# counts for grouped bar chart
+ufo_counts <- ufo_csv %>%
+  group_by(country) %>%
+  summarize(ufo_sightings = n())
+
+airport_counts <- data.frame(
+  country = c("us", "ca", "au"),
+  airports = c(nrow(us_table), nrow(ca_table), nrow(au_table))
+)
+
+grouped_data <- merge(ufo_counts, airport_counts, by = "country")
+
+#make long
+grouped_long <- grouped_data %>%
+  pivot_longer(cols = c(ufo_sightings, airports),
+               names_to = "type", values_to = "count")
+```
+
+Create grouped bar chart 
+```{r}
+ggplot(grouped_long, aes(x = country, y = count, fill = type)) +
+  geom_col(position = "dodge", color = "black", linewidth = 0.3) +
+  geom_text(aes(label = count), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.3, color = "black", size = 3) +
+  scale_x_discrete(labels = c("us" = "USA",
+                              "ca" = "Canada",
+                              "au" = "Australia")) +
+  scale_fill_manual(values = c("ufo_sightings" = "#80EF80",
+                               "airports" = "lightblue")) +
+  theme_minimal() +
+  ggtitle("UFO Sightings vs Number of Airports per Country") +
+  xlab("Country") + ylab("Count")
+```
+
+Wrangling data for Near vs Far grouped bar chart 
+```{r}
+haversine <- function(lat1, lon1, lat2, lon2) {
+  R <- 6371
+  dlat <- (lat2 - lat1) * pi / 180
+  dlon <- (lon2 - lon1) * pi / 180
+  a <- sin(dlat/2)^2 + cos(lat1*pi/180) * cos(lat2*pi/180) * sin(dlon/2)^2
+  c <- 2 * atan2(sqrt(a), sqrt(1 - a))
+  R * c
+}
+
+nearest_airport_distance <- function(ufo_df, airport_df) {
+  distances <- numeric(nrow(ufo_df))
+  
+  for(i in seq_len(nrow(ufo_df))) {
+    lat1 <- ufo_df$latitude[i]
+    lon1 <- ufo_df$longitude[i]
+    
+    dlist <- haversine(lat1, lon1,
+                       airport_df$latitude,
+                       airport_df$longitude)
+    
+    distances[i] <- min(dlist, na.rm = TRUE)
+  }
+  
+  distances
+}
+
+ufo_us$dist <- nearest_airport_distance(ufo_us, us_table)
+ufo_ca$dist <- nearest_airport_distance(ufo_ca, ca_table)
+ufo_au$dist <- nearest_airport_distance(ufo_au, au_table)
+
+ufo_dist <- rbind(
+  cbind(ufo_us, country = "us"),
+  cbind(ufo_ca, country = "ca"),
+  cbind(ufo_au, country = "au")
+)
+
+ufo_dist$group <- ifelse(ufo_dist$dist <= 50, "Near Airport", "Far Away")
+```
+
+
+Creating grouped bar chart #2
+```{r}
+ggplot(ufo_dist, aes(x = country, fill = group)) +
+  geom_bar(position = "dodge", color = "black", linewidth = 0.3) +
+  geom_text(stat = "count", aes(label = ..count..), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.3, color = "black", size = 3) +
+  scale_fill_manual(
+    name = "Distance",
+    values = c("Near Airport" = "lightblue",
+               "Far Away" = "#C64B8C")
+  ) +
+  scale_x_discrete(labels = c("us" = "USA",
+                              "ca" = "Canada",
+                              "au" = "Australia")) +
+  theme_minimal() +
+  ggtitle("UFO Sightings Near Airports (=<50 km) vs Far Away") +
+  xlab("Country") + ylab("Number of Sightings")
+
+#same as above w no usa for better viz 
+ufo_dist_no_us <- ufo_dist[ufo_dist$country != "us", ]
+
+ggplot(ufo_dist_no_us, aes(x = country, fill = group)) +
+  geom_bar(position = "dodge", color = "black", linewidth = 0.3) +
+  geom_text(stat = "count", aes(label = ..count..), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.3, color = "black", size = 3) +
+  scale_fill_manual(
+    name = "Distance",
+    values = c("Near Airport" = "lightblue",
+               "Far Away" = "#C64B8C")
+  ) +
+  scale_x_discrete(labels = c("ca" = "Canada",
+                              "au" = "Australia")) +
+  theme_minimal() +
+  ggtitle("UFO Sightings Near Airports (=<50 km) vs Far Away (No USA)") +
+  xlab("Country") + ylab("Number of Sightings")
+```
